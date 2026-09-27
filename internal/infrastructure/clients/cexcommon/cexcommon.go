@@ -35,6 +35,8 @@ type Trade struct {
 	Fee       float64
 	FeeAsset  string
 	Timestamp time.Time
+	Currency  string  // optional activity currency; defaults to USD
+	Amount    float64 // optional activity amount; defaults to Price * Quantity
 }
 
 // Snapshot bundles balances + optional trades for one CEX.
@@ -133,6 +135,14 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 			if strings.EqualFold(t.Side, "sell") {
 				actType = brokerage.ActivitySell
 			}
+			currency := t.Currency
+			if currency == "" {
+				currency = "USD"
+			}
+			amount := t.Amount
+			if amount == 0 {
+				amount = t.Price * t.Quantity
+			}
 			acts = append(acts, brokerage.Activity{
 				ID:        t.ID,
 				AccountID: accountID,
@@ -140,15 +150,15 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 				TradeDate: t.Timestamp,
 				Price:     t.Price,
 				Units:     t.Quantity,
-				Amount:    t.Price * t.Quantity,
+				Amount:    amount,
 				Fee:       t.Fee,
-				Currency:  brokerage.Currency{Code: "USD"},
+				Currency:  brokerage.Currency{Code: currency},
 				Symbol: &brokerage.Symbol{
 					Symbol:    t.Symbol,
 					RawSymbol: t.Symbol,
 					Type:      brokerage.SymbolType{Code: "CRYPTO", IsSupported: true},
 					Exchange:  brokerage.Exchange{Code: strings.ToUpper(slug)},
-					Currency:  brokerage.Currency{Code: "USD"},
+					Currency:  brokerage.Currency{Code: currency},
 				},
 				RawType:        strings.ToUpper(t.Side),
 				ProviderType:   slug,

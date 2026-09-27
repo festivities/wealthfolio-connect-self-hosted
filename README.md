@@ -232,7 +232,8 @@ enabled. Allow this server's IP in the gateway's *Trusted IPs* list.
 ### Binance Spot (REST)
 
 Create a **read-only** API key (Spot account permissions are sufficient).
-The client syncs Spot trade history as well as balances; the read-only key is unchanged.
+The client syncs Spot fills and completed Buy Crypto fiat payments, preserving the
+fiat currency (for example, PHP); the read-only key is sufficient.
 
 | Name                 | Description       |
 | -------------------- | ----------------- |

@@ -29,6 +29,8 @@ type Fetcher interface {
 	// Trades fetches one page of the user's spot trades for a symbol,
 	// returning the most recent trades up to endTimeMs (0 = unbounded).
 	Trades(ctx context.Context, symbol string, endTimeMs int64) ([]UserTrade, error)
+	// FiatPayments fetches one page of the user's fiat payment history.
+	FiatPayments(ctx context.Context, transactionType string, page, rows int32) (FiatPaymentPage, error)
 }
 
 // RawBalance is the per-asset payload a Fetcher returns. Public so tests
@@ -59,9 +61,45 @@ type UserTrade struct {
 	IsBuyer bool
 }
 
+// FiatPayment is one Binance fiat payment in an SDK-independent shape.
+type FiatPayment struct {
+	// OrderNo is Binance's fiat payment order identifier.
+	OrderNo string
+	// SourceAmount is the amount paid or received in fiat currency.
+	SourceAmount string
+	// FiatCurrency is the currency used for the source amount and fee.
+	FiatCurrency string
+	// ObtainAmount is the crypto amount obtained by the order.
+	ObtainAmount string
+	// CryptoCurrency is the asset obtained by the order.
+	CryptoCurrency string
+	// TotalFee is the order fee in FiatCurrency.
+	TotalFee string
+	// Price is the fiat price per crypto unit.
+	Price string
+	// Status is the exchange's order status.
+	Status string
+	// CreateTime is the order creation time in Unix milliseconds.
+	CreateTime int64
+}
+
+// FiatPaymentPage is one page of Binance fiat payment history.
+type FiatPaymentPage struct {
+	// Success reports whether Binance accepted the request.
+	Success bool
+	// Total is the total number of rows for this transaction type.
+	Total int32
+	// Data contains the returned payment rows.
+	Data []FiatPayment
+}
+
 const (
 	tradePageSize = 1000
 	tradeMaxPages = 2
+
+	fiatPaymentPageSize int32 = 100
+	fiatPaymentMaxPages int32 = 5
+	fiatPaymentMaxRows        = fiatPaymentPageSize * fiatPaymentMaxPages
 )
 
 // Client is the Binance BrokerClient.
@@ -98,11 +136,83 @@ func (c *Client) Fetch(ctx context.Context) (domainsync.BrokerSnapshot, error) {
 		prices = map[string]float64{}
 	}
 	snapshot := buildSnapshot(balances, prices)
-	if trades, err := c.fetchTrades(ctx, balances); err == nil {
-		snapshot.Trades = trades
+	spotTrades, spotErr := c.fetchTrades(ctx, balances)
+	fiatTrades, fiatErr := c.fetchFiatPayments(ctx)
+	if spotErr == nil && fiatErr == nil {
+		snapshot.Trades = append(spotTrades, fiatTrades...)
 		snapshot.ActivitiesFetched = true
 	}
 	return cexcommon.Translate("binance", "Binance", snapshot), nil
+}
+
+func (c *Client) fetchFiatPayments(ctx context.Context) ([]cexcommon.Trade, error) {
+	// Sell payments reverse the source/obtain currencies. Their mapping needs
+	// separate treatment; only import Buy Crypto orders here.
+	var all []cexcommon.Trade
+	first, err := c.fetcher.FiatPayments(ctx, string(binsdk.TransactionTypeBuy), 1, fiatPaymentPageSize)
+	if err != nil {
+		return nil, fmt.Errorf("binance: fiat buy history: %w", err)
+	}
+	if !first.Success {
+		return nil, errors.New("binance: fiat buy history request unsuccessful")
+	}
+	if first.Total < 0 || first.Total > fiatPaymentMaxRows {
+		return nil, fmt.Errorf("binance: fiat buy history exceeds the %d-row sync limit", fiatPaymentMaxRows)
+	}
+
+	pages := (first.Total + fiatPaymentPageSize - 1) / fiatPaymentPageSize
+	if pages == 0 {
+		pages = 1
+	}
+	for page := int32(1); page <= pages; page++ {
+		current := first
+		if page > 1 {
+			current, err = c.fetcher.FiatPayments(ctx, string(binsdk.TransactionTypeBuy), page, fiatPaymentPageSize)
+			if err != nil {
+				return nil, fmt.Errorf("binance: fiat buy history page %d: %w", page, err)
+			}
+		}
+		if !current.Success {
+			return nil, fmt.Errorf("binance: fiat buy history page %d unsuccessful", page)
+		}
+		if current.Total != first.Total {
+			return nil, errors.New("binance: fiat buy history changed while paging")
+		}
+		expectedRows := fiatPaymentPageSize
+		remaining := first.Total - (page-1)*fiatPaymentPageSize
+		if remaining < expectedRows {
+			expectedRows = remaining
+		}
+		if int32(len(current.Data)) != expectedRows {
+			return nil, fmt.Errorf("binance: fiat buy history page %d incomplete", page)
+		}
+		for _, payment := range current.Data {
+			if strings.EqualFold(strings.TrimSpace(payment.Status), "completed") {
+				all = append(all, mapFiatPayment(payment))
+			}
+		}
+	}
+	return all, nil
+}
+
+func mapFiatPayment(payment FiatPayment) cexcommon.Trade {
+	price, _ := strconv.ParseFloat(payment.Price, 64)           //nolint:errcheck // treat malformed exchange values as zero
+	quantity, _ := strconv.ParseFloat(payment.ObtainAmount, 64) //nolint:errcheck // treat malformed exchange values as zero
+	amount, _ := strconv.ParseFloat(payment.SourceAmount, 64)   //nolint:errcheck // treat malformed exchange values as zero
+	fee, _ := strconv.ParseFloat(payment.TotalFee, 64)          //nolint:errcheck // treat malformed exchange values as zero
+	currency := strings.ToUpper(payment.FiatCurrency)
+	return cexcommon.Trade{
+		ID:        "fiat:" + payment.OrderNo,
+		Symbol:    strings.ToUpper(payment.CryptoCurrency),
+		Side:      "buy",
+		Price:     price,
+		Quantity:  quantity,
+		Fee:       fee,
+		FeeAsset:  currency,
+		Timestamp: time.UnixMilli(payment.CreateTime).UTC(),
+		Currency:  currency,
+		Amount:    amount,
+	}
 }
 
 // fetchTrades walks backwards through each symbol's trade history. Binance
@@ -271,4 +381,34 @@ func (f *realFetcher) Trades(ctx context.Context, symbol string, endTimeMs int64
 		})
 	}
 	return out, nil
+}
+
+// FiatPayments fetches one page of fiat payment history from Binance.
+func (f *realFetcher) FiatPayments(ctx context.Context, transactionType string, page, rows int32) (FiatPaymentPage, error) {
+	history, err := f.client.NewFiatPaymentsHistoryService().
+		TransactionType(binsdk.TransactionType(transactionType)).
+		Page(page).
+		Rows(rows).
+		Do(ctx)
+	if err != nil {
+		return FiatPaymentPage{}, err
+	}
+	if history == nil {
+		return FiatPaymentPage{}, errors.New("binance: empty fiat payment history response")
+	}
+	data := make([]FiatPayment, 0, len(history.Data))
+	for _, payment := range history.Data {
+		data = append(data, FiatPayment{
+			OrderNo:        payment.OrderNo,
+			SourceAmount:   payment.SourceAmount,
+			FiatCurrency:   payment.FiatCurrency,
+			ObtainAmount:   payment.ObtainAmount,
+			CryptoCurrency: payment.CryptoCurrency,
+			TotalFee:       payment.TotalFee,
+			Price:          payment.Price,
+			Status:         payment.Status,
+			CreateTime:     payment.CreateTime,
+		})
+	}
+	return FiatPaymentPage{Success: history.Success, Total: history.Total, Data: data}, nil
 }

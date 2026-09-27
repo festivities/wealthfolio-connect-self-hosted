@@ -52,6 +52,22 @@ var _ = Describe("Translate", func() {
 		Expect(acts).To(HaveLen(2))
 		Expect(string(acts[0].Type)).To(Equal("BUY"))
 		Expect(string(acts[1].Type)).To(Equal("SELL"))
+		Expect(acts[0].Amount).To(Equal(6000.0))
+		Expect(acts[0].Currency.Code).To(Equal("USD"))
+		Expect(acts[0].Symbol.Currency.Code).To(Equal("USD"))
+	})
+
+	It("uses explicit trade amount and currency overrides", func() {
+		snap := cexcommon.Translate("binance", "Binance", cexcommon.Snapshot{
+			Trades: []cexcommon.Trade{{
+				ID: "fiat:1", Symbol: "SOL", Side: "buy", Price: 400,
+				Quantity: 2.5, Amount: 1000, Currency: "PHP",
+			}},
+		})
+		activity := snap.Activities["binance-spot"][0]
+		Expect(activity.Amount).To(Equal(1000.0))
+		Expect(activity.Currency.Code).To(Equal("PHP"))
+		Expect(activity.Symbol.Currency.Code).To(Equal("PHP"))
 	})
 
 	It("marks an empty successful trade query as synced", func() {

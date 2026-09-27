@@ -7,7 +7,7 @@ import (
 
 // TestRealFetcher_PropagatesNetworkErrors exercises the real Binance SDK
 // wrappers without doing any actual network I/O: a pre-canceled context
-// makes both calls fail before any HTTP request leaves the process.
+// makes each call fail before an HTTP request leaves the process.
 func TestRealFetcher_PropagatesNetworkErrors(t *testing.T) {
 	c := New("k", "s", nil) // nil → realFetcher
 	ctx, cancel := context.WithCancel(context.Background())
@@ -26,5 +26,8 @@ func TestRealFetcher_PropagatesNetworkErrors(t *testing.T) {
 	}
 	if _, err := rf.Trades(ctx, "BTCUSDT", 0); err == nil {
 		t.Error("Trades: expected error from canceled context")
+	}
+	if _, err := rf.FiatPayments(ctx, "0", 1, fiatPaymentPageSize); err == nil {
+		t.Error("FiatPayments: expected error from canceled context")
 	}
 }

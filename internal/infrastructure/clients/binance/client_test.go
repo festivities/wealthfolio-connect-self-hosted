@@ -22,14 +22,23 @@ type fakeFetcher struct {
 	trades     map[string][]UserTrade
 	tradePages map[string]map[int64][]UserTrade
 	tradeCalls []tradeCall
+	fiatPages  map[string]map[int32]FiatPaymentPage
+	fiatCalls  []fiatPaymentCall
 	balErr     error
 	priceErr   error
 	tradeErr   error
+	fiatErr    error
 }
 
 type tradeCall struct {
 	symbol    string
 	endTimeMs int64
+}
+
+type fiatPaymentCall struct {
+	transactionType string
+	page            int32
+	rows            int32
 }
 
 func (f *fakeFetcher) Account(_ context.Context) ([]RawBalance, error) {
@@ -47,6 +56,16 @@ func (f *fakeFetcher) Trades(_ context.Context, symbol string, endTimeMs int64) 
 		return pages[endTimeMs], nil
 	}
 	return f.trades[symbol], nil
+}
+func (f *fakeFetcher) FiatPayments(_ context.Context, transactionType string, page, rows int32) (FiatPaymentPage, error) {
+	f.fiatCalls = append(f.fiatCalls, fiatPaymentCall{transactionType: transactionType, page: page, rows: rows})
+	if f.fiatErr != nil {
+		return FiatPaymentPage{}, f.fiatErr
+	}
+	if pages, ok := f.fiatPages[transactionType]; ok {
+		return pages[page], nil
+	}
+	return FiatPaymentPage{Success: true}, nil
 }
 
 var _ = Describe("Binance Client", func() {
@@ -229,5 +248,112 @@ var _ = Describe("Binance Client", func() {
 		_, err := New("k", "s", fetcher).Fetch(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fetcher.tradeCalls).To(Equal([]tradeCall{{symbol: "ETHUSDT", endTimeMs: 0}}))
+	})
+
+	It("imports completed Buy Crypto fiat payments in their source currency", func() {
+		fetcher := &fakeFetcher{fiatPages: map[string]map[int32]FiatPaymentPage{
+			"0": {1: {Success: true, Total: 3, Data: []FiatPayment{
+				{
+					OrderNo: "buy-1", SourceAmount: "1000", FiatCurrency: "php",
+					ObtainAmount: "2.5", CryptoCurrency: "sol", TotalFee: "10", Price: "400",
+					Status: "cOmPlEtEd", CreateTime: 1700000000123,
+				},
+				{
+					OrderNo: "buy-processing", SourceAmount: "2000", FiatCurrency: "PHP",
+					ObtainAmount: "5", CryptoCurrency: "SOL", TotalFee: "20", Price: "400",
+					Status: "Processing", CreateTime: 1700000001123,
+				},
+				{
+					OrderNo: "buy-failed", SourceAmount: "3000", FiatCurrency: "PHP",
+					ObtainAmount: "7.5", CryptoCurrency: "SOL", TotalFee: "30", Price: "400",
+					Status: "Failed", CreateTime: 1700000002123,
+				},
+			}}},
+		}}
+		snapshot, err := New("k", "s", fetcher).Fetch(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshot.Accounts[0].InitialTxSyncDone).To(BeTrue())
+
+		activities := snapshot.Activities["binance-spot"]
+		Expect(activities).To(HaveLen(1))
+		Expect(activities[0].ID).To(Equal("fiat:buy-1"))
+		Expect(activities[0].SourceRecordID).To(Equal("fiat:buy-1"))
+		Expect(activities[0].Type).To(Equal(brokerage.ActivityBuy))
+		Expect(activities[0].Symbol.Symbol).To(Equal("SOL"))
+		Expect(activities[0].Price).To(Equal(400.0))
+		Expect(activities[0].Units).To(Equal(2.5))
+		Expect(activities[0].Amount).To(Equal(1000.0))
+		Expect(activities[0].Fee).To(Equal(10.0))
+		Expect(activities[0].Currency.Code).To(Equal("PHP"))
+		Expect(activities[0].Symbol.Currency.Code).To(Equal("PHP"))
+		Expect(activities[0].TradeDate.UnixMilli()).To(Equal(int64(1700000000123)))
+	})
+
+	It("marks successful fiat history fetched even when every order is incomplete", func() {
+		fetcher := &fakeFetcher{fiatPages: map[string]map[int32]FiatPaymentPage{
+			"0": {1: {Success: true, Total: 1, Data: []FiatPayment{{Status: "Processing"}}}},
+		}}
+		snapshot, err := New("k", "s", fetcher).Fetch(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshot.Activities).To(BeEmpty())
+		Expect(snapshot.Accounts[0].InitialTxSyncDone).To(BeTrue())
+	})
+
+	It("paginates fiat history within the bounded page size", func() {
+		firstPage := make([]FiatPayment, fiatPaymentPageSize)
+		for i := range firstPage {
+			firstPage[i].Status = "Processing"
+		}
+		fetcher := &fakeFetcher{fiatPages: map[string]map[int32]FiatPaymentPage{
+			"0": {
+				1: {Success: true, Total: 101, Data: firstPage},
+				2: {Success: true, Total: 101, Data: []FiatPayment{{
+					OrderNo: "last", SourceAmount: "100", FiatCurrency: "PHP", ObtainAmount: "1",
+					CryptoCurrency: "SOL", Price: "100", Status: "Completed",
+				}}},
+			},
+		}}
+		snapshot, err := New("k", "s", fetcher).Fetch(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshot.Activities["binance-spot"]).To(HaveLen(1))
+		Expect(fetcher.fiatCalls).To(Equal([]fiatPaymentCall{
+			{transactionType: "0", page: 1, rows: fiatPaymentPageSize},
+			{transactionType: "0", page: 2, rows: fiatPaymentPageSize},
+		}))
+	})
+
+	It("leaves transaction sync incomplete when fiat history exceeds the fetch cap", func() {
+		fetcher := &fakeFetcher{fiatPages: map[string]map[int32]FiatPaymentPage{
+			"0": {1: {Success: true, Total: fiatPaymentMaxRows + 1}},
+		}}
+		snapshot, err := New("k", "s", fetcher).Fetch(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshot.Activities).To(BeEmpty())
+		Expect(snapshot.Accounts[0].InitialTxSyncDone).To(BeFalse())
+		Expect(fetcher.fiatCalls).To(HaveLen(1))
+	})
+
+	It("keeps the balances snapshot when fiat history fails", func() {
+		snapshot, err := New("k", "s", &fakeFetcher{
+			balances: []RawBalance{{Asset: "SOL", Free: 1}},
+			fiatErr:  errors.New("fiat history unavailable"),
+		}).Fetch(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(snapshot.Holdings).To(HaveLen(1))
+		Expect(snapshot.Activities).To(BeEmpty())
+		Expect(snapshot.Accounts[0].InitialTxSyncDone).To(BeFalse())
+	})
+
+	It("maps the fiat fee asset and prefixed order ID", func() {
+		trade := mapFiatPayment(FiatPayment{
+			OrderNo: "order-1", SourceAmount: "30", FiatCurrency: "php",
+			ObtainAmount: "1", CryptoCurrency: "sol", TotalFee: "0.5", Price: "30",
+			CreateTime: 1700000000123,
+		})
+		Expect(trade.ID).To(Equal("fiat:order-1"))
+		Expect(trade.Symbol).To(Equal("SOL"))
+		Expect(trade.FeeAsset).To(Equal("PHP"))
+		Expect(trade.Currency).To(Equal("PHP"))
+		Expect(trade.Amount).To(Equal(30.0))
 	})
 })
