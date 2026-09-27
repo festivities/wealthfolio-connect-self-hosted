@@ -209,6 +209,12 @@ func (h *ActivityHandler) List(w http.ResponseWriter, r *http.Request) {
 		middleware.WriteError(w, http.StatusBadRequest, "invalid_request", "INVALID_END_DATE", "end_date must be YYYY-MM-DD")
 		return
 	}
+	if endDate != nil {
+		// Date filters are inclusive calendar dates. The repository compares
+		// timestamps, so extend end_date through the end of that UTC day.
+		inclusiveEndDate := endDate.AddDate(0, 0, 1).Add(-time.Nanosecond)
+		endDate = &inclusiveEndDate
+	}
 
 	res, err := h.svc.List(r.Context(), appbrokerage.ActivityQuery{
 		AccountID: accountID,

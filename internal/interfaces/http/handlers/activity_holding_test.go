@@ -83,6 +83,7 @@ var _ = Describe("ActivityHandler.List", func() {
 				Expect(f.Limit).To(Equal(50))
 				Expect(f.StartDate).NotTo(BeNil())
 				Expect(f.EndDate).NotTo(BeNil())
+				Expect(*f.EndDate).To(Equal(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC).Add(-time.Nanosecond)))
 				return []brokerage.Activity{
 					{
 						ID:        "t1",
