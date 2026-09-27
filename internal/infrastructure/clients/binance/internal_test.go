@@ -24,4 +24,7 @@ func TestRealFetcher_PropagatesNetworkErrors(t *testing.T) {
 	if _, err := rf.Prices(ctx); err == nil {
 		t.Error("Prices: expected error from canceled context")
 	}
+	if _, err := rf.Trades(ctx, "BTCUSDT", 0); err == nil {
+		t.Error("Trades: expected error from canceled context")
+	}
 }
