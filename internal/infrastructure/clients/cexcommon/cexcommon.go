@@ -37,6 +37,9 @@ type Trade struct {
 	Timestamp time.Time
 	Currency  string  // optional activity currency; defaults to USD
 	Amount    float64 // optional activity amount; defaults to Price * Quantity
+	// SymbolCurrency optionally overrides the asset's quote currency. This can
+	// differ from the transaction currency for a fiat-funded crypto purchase.
+	SymbolCurrency string
 }
 
 // Snapshot bundles balances + optional trades for one CEX.
@@ -139,6 +142,10 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 			if currency == "" {
 				currency = "USD"
 			}
+			symbolCurrency := t.SymbolCurrency
+			if symbolCurrency == "" {
+				symbolCurrency = currency
+			}
 			amount := t.Amount
 			if amount == 0 {
 				amount = t.Price * t.Quantity
@@ -158,7 +165,7 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 					RawSymbol: t.Symbol,
 					Type:      brokerage.SymbolType{Code: "CRYPTO", IsSupported: true},
 					Exchange:  brokerage.Exchange{Code: strings.ToUpper(slug)},
-					Currency:  brokerage.Currency{Code: currency},
+					Currency:  brokerage.Currency{Code: symbolCurrency},
 				},
 				RawType:        strings.ToUpper(t.Side),
 				ProviderType:   slug,

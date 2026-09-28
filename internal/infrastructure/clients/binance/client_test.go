@@ -285,7 +285,7 @@ var _ = Describe("Binance Client", func() {
 		Expect(activities[0].Amount).To(Equal(1000.0))
 		Expect(activities[0].Fee).To(Equal(10.0))
 		Expect(activities[0].Currency.Code).To(Equal("PHP"))
-		Expect(activities[0].Symbol.Currency.Code).To(Equal("PHP"))
+		Expect(activities[0].Symbol.Currency.Code).To(Equal("USD"))
 		Expect(activities[0].TradeDate.UnixMilli()).To(Equal(int64(1700000000123)))
 	})
 
@@ -354,6 +354,7 @@ var _ = Describe("Binance Client", func() {
 		Expect(trade.Symbol).To(Equal("SOL"))
 		Expect(trade.FeeAsset).To(Equal("PHP"))
 		Expect(trade.Currency).To(Equal("PHP"))
+		Expect(trade.SymbolCurrency).To(Equal("USD"))
 		Expect(trade.Amount).To(Equal(30.0))
 	})
 })

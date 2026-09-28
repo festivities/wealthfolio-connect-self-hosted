@@ -61,13 +61,13 @@ var _ = Describe("Translate", func() {
 		snap := cexcommon.Translate("binance", "Binance", cexcommon.Snapshot{
 			Trades: []cexcommon.Trade{{
 				ID: "fiat:1", Symbol: "SOL", Side: "buy", Price: 400,
-				Quantity: 2.5, Amount: 1000, Currency: "PHP",
+				Quantity: 2.5, Amount: 1000, Currency: "PHP", SymbolCurrency: "USD",
 			}},
 		})
 		activity := snap.Activities["binance-spot"][0]
 		Expect(activity.Amount).To(Equal(1000.0))
 		Expect(activity.Currency.Code).To(Equal("PHP"))
-		Expect(activity.Symbol.Currency.Code).To(Equal("PHP"))
+		Expect(activity.Symbol.Currency.Code).To(Equal("USD"))
 	})
 
 	It("marks an empty successful trade query as synced", func() {

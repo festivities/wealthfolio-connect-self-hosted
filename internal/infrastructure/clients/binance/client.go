@@ -211,7 +211,10 @@ func mapFiatPayment(payment FiatPayment) cexcommon.Trade {
 		FeeAsset:  currency,
 		Timestamp: time.UnixMilli(payment.CreateTime).UTC(),
 		Currency:  currency,
-		Amount:    amount,
+		// Binance Spot holdings are quoted in USD; keep the fiat transaction
+		// currency separate so PHP purchases resolve to the same crypto asset.
+		SymbolCurrency: "USD",
+		Amount:         amount,
 	}
 }
 

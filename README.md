@@ -233,7 +233,8 @@ enabled. Allow this server's IP in the gateway's *Trusted IPs* list.
 
 Create a **read-only** API key (Spot account permissions are sufficient).
 The client syncs Spot fills and completed Buy Crypto fiat payments, preserving the
-fiat currency (for example, PHP); the read-only key is sufficient.
+fiat transaction currency (for example, PHP) while matching crypto assets to the
+USD-quoted Binance holding identity; the read-only key is sufficient.
 
 | Name                 | Description       |
 | -------------------- | ----------------- |
