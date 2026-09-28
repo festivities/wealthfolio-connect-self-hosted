@@ -52,7 +52,7 @@ type positionDTO struct {
 	Units                float64           `json:"units"`
 	Price                float64           `json:"price"`
 	OpenPnL              float64           `json:"open_pnl"`
-	AveragePurchasePrice float64           `json:"average_purchase_price"`
+	AveragePurchasePrice float64           `json:"average_purchase_price,omitempty"`
 	Currency             currencyDTO       `json:"currency"`
 	CashEquivalent       bool              `json:"cash_equivalent"`
 }

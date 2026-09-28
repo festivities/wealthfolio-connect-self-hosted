@@ -116,10 +116,10 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 				Exchange:    brokerage.Exchange{Code: strings.ToUpper(slug), Name: displayName},
 				Currency:    brokerage.Currency{Code: "USD"},
 			},
-			Units:                b.Quantity,
-			Price:                b.PriceUSD,
-			AveragePurchasePrice: b.PriceUSD,
-			Currency:             brokerage.Currency{Code: "USD"},
+			Units: b.Quantity,
+			Price: b.PriceUSD,
+			// ponytail: balances expose mark, not cost; derive basis from trades when quantities change.
+			Currency: brokerage.Currency{Code: "USD"},
 		})
 	}
 

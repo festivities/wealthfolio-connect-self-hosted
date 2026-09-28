@@ -39,6 +39,7 @@ var _ = Describe("Translate", func() {
 		Expect(snap.Holdings[0].Positions).To(HaveLen(1))
 		Expect(snap.Holdings[0].Positions[0].Symbol.Symbol).To(Equal("BTC"))
 		Expect(snap.Holdings[0].Positions[0].Units).To(Equal(0.5))
+		Expect(snap.Holdings[0].Positions[0].AveragePurchasePrice).To(BeZero())
 	})
 
 	It("translates trades into BUY/SELL activities", func() {

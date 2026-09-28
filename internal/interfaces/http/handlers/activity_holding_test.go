@@ -196,6 +196,12 @@ var _ = Describe("HoldingHandler.Get", func() {
 					Units: 10, Price: 380, OpenPnL: 50, AveragePurchasePrice: 375,
 					Currency: brokerage.Currency{Code: "HKD"}, CashEquivalent: false,
 				},
+				{
+					Symbol:   brokerage.Symbol{Symbol: "SOL"},
+					Units:    1,
+					Price:    10,
+					Currency: brokerage.Currency{Code: "USD"},
+				},
 			},
 			OptionPositions: []brokerage.OptionPosition{
 				{
@@ -217,6 +223,8 @@ var _ = Describe("HoldingHandler.Get", func() {
 		Expect(body).To(ContainSubstring(`"symbol":"00700"`))
 		Expect(body).To(ContainSubstring(`"holding-00700"`))
 		Expect(body).To(ContainSubstring(`"open_pnl":50`))
+		Expect(body).To(ContainSubstring(`"average_purchase_price":375`))
+		Expect(body).NotTo(ContainSubstring(`"average_purchase_price":0`))
 		Expect(body).To(ContainSubstring(`"option_type":"CALL"`))
 		Expect(body).To(ContainSubstring(`"strike_price":150`))
 	})
