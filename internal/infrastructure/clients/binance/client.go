@@ -213,6 +213,12 @@ func mapFiatPayment(payment FiatPayment) cexcommon.Trade {
 		Currency:  currency,
 		// Binance Spot holdings are quoted in USD; keep the fiat transaction
 		// currency separate so PHP purchases resolve to the same crypto asset.
+		// Price stays in the fiat transaction currency (it is the recorded cost,
+		// not a market quote). The Wealthfolio broker consumer must not seed the
+		// USD asset's BROKER quote from a differently-denominated price; that
+		// guard lives in its broker service. Suppressing the price here instead
+		// would make the consumer treat every fiat buy with a fee as an
+		// incomplete, reviewable trade and corrupt the final-cash inference.
 		SymbolCurrency: "USD",
 		Amount:         amount,
 	}

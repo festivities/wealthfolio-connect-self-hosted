@@ -387,6 +387,189 @@ Coverage threshold is **≥ 90%** — CI will fail below that.
 
 ---
 
+## Upstream Wealthfolio v3.9.1 backend patch
+
+Before building the self-hosted Wealthfolio backend from upstream v3.9.1
+(`392f272c`), apply [`patches/wealthfolio-v3.9.1-broker-quote-basis.patch`](./patches/wealthfolio-v3.9.1-broker-quote-basis.patch)
+to `crates/connect/src/broker/service.rs`. It prevents fiat-denominated trade
+prices from becoming quotes in another currency and avoids carrying stale
+average-cost basis forward when holdings grow without a reported basis. This
+Rust patch is separate from building this repository's Go service.
+
+## Maintenance: stale fiat-quoted crypto assets
+
+Before the symbol fix that quotes the crypto leg of a fiat-funded purchase in
+USD (`BTC/USD`) while preserving the fiat transaction amount (PHP), the
+connector published the crypto leg quoted in the transaction fiat (`BTC/PHP`).
+Wealthfolio therefore created a separate `CRYPTO:BTC/PHP` asset and cached
+quotes, `quote_sync_state` and auto-generated taxonomy rows against it. On an
+existing installation those rows can survive the switch to `BTC/USD` and keep
+the stale asset visible.
+
+`scripts/cleanup_php_crypto_assets.py` reports and removes safe stale rows from a
+Wealthfolio SQLite database. It uses only the Python standard library, defaults
+to a **dry run**, and refuses to touch anything it cannot prove is safe. The
+report has two sections: stale PHP-quoted crypto assets and existing
+cross-currency broker quotes on USD crypto assets.
+
+### Invocation
+
+```bash
+# 1. Stop the Wealthfolio server, then find its SQLite file, e.g.
+#    <data-dir>/wealthfolio.db (see the app's data directory).
+
+# 2. Inspect first (default is a dry run — no writes, opened read-only):
+python scripts/cleanup_php_crypto_assets.py /path/to/wealthfolio.db
+
+# 3. Apply (writes, backs up first, single transaction):
+python scripts/cleanup_php_crypto_assets.py /path/to/wealthfolio.db --apply
+
+# Machine-readable report:
+python scripts/cleanup_php_crypto_assets.py /path/to/wealthfolio.db --json
+```
+
+Options: `--from-ccy` (stale quote currency, default `PHP`), `--to-ccy`
+(replacement quote currency, default `USD`), `--apply`, `--json`.
+
+The same currency options scope both sections. In particular, the quote repair
+defaults to `PHP` → `USD`; it does not scan other fiat currencies by default.
+
+`--apply` first copies the database and its `-wal` / `-shm` sidecars to
+`<db>.bak-YYYYmmdd-HHMMSS`, then opens it for writing. If there is nothing to
+delete, no backup is taken. Keep the backup file until you have verified the
+result. Always stop the server first: SQLite writes from a running app and this
+script must not interleave.
+
+### What it deletes
+
+An asset is deleted **only** when every one of the following holds. Anything
+else is reported as `SKIP` with the reason; nothing is guessed.
+
+Counterpart:
+
+- it is a `CRYPTO` asset quoted in `--from-ccy` with `quote_mode = 'MARKET'`;
+- exactly one **active** `CRYPTO` asset quoted in `--to-ccy` exists with the
+  same `instrument_symbol` and `kind` (the counterpart), and the two `name`
+  fields match (both empty, or identical).
+
+No references (any one blocks):
+
+- no `activities`, `lots`, `lot_disposals`, `snapshot_positions`,
+  `holdings_snapshots.positions` JSON, `goal_plans` JSON, or
+  `allocation_target_constraints` (`subject_type = 'asset'`) row;
+- no unrecognised `asset_id` table references it (unknown tables fail closed);
+- no `asset_logos` row (a custom, user-supplied logo override — never deleted);
+- no `quotes` row with `source = 'MANUAL'` or a non-empty `notes` value (a
+  manual price or a user annotation);
+- no `asset_taxonomy_assignments` row whose `source` is outside the generated
+  set (`AUTO`, `migrated`) — e.g. `manual` or `ai` counts as user work.
+
+No user-owned asset fields:
+
+- `assets.notes` empty, `is_active = 1`;
+- `provider_config` is `NULL`, or a plain **built-in** provider configuration:
+  keys limited to `preferred_provider` / `overrides`, `preferred_provider` in
+  the built-in provider set (`YAHOO`, `ALPHA_VANTAGE`, `MARKETDATA_APP`,
+  `METAL_PRICE_API`, `FINNHUB`, `BOERSE_FRANKFURT`, `US_TREASURY_CALC`,
+  `OPENFIGI`), overrides keyed only by those providers with only
+  `type`/`symbol`/`from`/`to` and a known override `type`. Anything else
+  (`CUSTOM_SCRAPER`, `custom_provider_id`, a custom provider code, unknown
+  keys) is a user-configured source and blocks.
+- `metadata` is `NULL` or contains only auto-written keys (`legacy`,
+  `identifiers`, provider-profile enrichment such as `sectors`, `countries`,
+  `marketCap`, …, and instrument specs such as `option`/`bond`). Any other key
+  is user data and blocks.
+
+No device-sync involvement (any one blocks every candidate):
+
+- `app_settings.sync_enabled` is explicitly truthy, or a `trusted` row exists in
+  `sync_device_config`, or `sync_engine_state` has run (`last_push_at` /
+  `last_pull_at`), or `sync_outbox` is non-empty;
+- additionally, `sync_entity_metadata` / `sync_outbox` / `sync_applied_events`
+  must have no rows for the asset, its logo, its quotes, or its generated
+  assignments. A raw `DELETE FROM assets` does not emit the outbox delete
+  event, so deleting a synced asset would diverge across devices — use the
+  Wealthfolio UI for those.
+
+It then deletes the asset plus its provider `quotes`, `quote_sync_state` and
+generated `asset_taxonomy_assignments` rows. `asset_logos` and manual/noted
+quotes are never touched. Re-running is safe: once cleaned, the script reports
+no eligible deletions and takes no backup.
+
+### Existing PHP broker quotes on USD crypto assets
+
+Wealthfolio Connect previously wrote broker quotes in the activity's
+transaction currency. A Binance fiat `BUY` in PHP could therefore leave a
+`BROKER` quote with `currency = 'PHP'` attached to the USD-quoted crypto asset.
+Those rows can be selected as previous-day prices even though the asset is
+quoted in USD.
+
+The second report section considers only rows satisfying **all** of these:
+
+- quote source is `BROKER`, quote currency matches `--from-ccy` (default PHP),
+  and it differs from the asset's `--to-ccy` quote currency (default USD);
+- asset is active, `CRYPTO`, `MARKET`, and quoted in `--to-ccy`;
+- the same asset and quote day have an effective `BUY` activity
+  (`activity_type_override` when set, otherwise `activity_type`) whose
+  `source_system` is `BINANCE` and transaction `currency` is `--from-ccy`;
+- quote has no non-empty user note, device-sync is inactive, and no sync
+  metadata/outbox/applied-event row references the quote or matching activity.
+
+Eligible rows are reported as `DELETE_QUOTE`. A cross-currency `BROKER` quote
+without the matching Binance activity, with a note, or with a sync reference is
+reported as `SKIP`. Manual quotes (`source = 'MANUAL'`), real USD quotes,
+quotes on other assets, and activities are never deleted or updated. Applying
+this section deletes **only the quote row**; it preserves the USD asset and its
+snapshot positions.
+
+### Transaction and failure guarantees
+
+- All writes run in a single `BEGIN IMMEDIATE` transaction with
+  `PRAGMA foreign_keys = ON`; `PRAGMA foreign_key_check` is verified before
+  `COMMIT`, and any error rolls the whole transaction back.
+- Planning happens **inside** that transaction and each deletion's eligibility
+  is re-checked under the lock (references, user-owned fields, device-sync,
+  asset counterpart, or the exact Binance activity/day match). A row that
+  became unsafe between preview and deletion is refused rather than half-deleted.
+- The database is copied **before** it is opened for writing, so even a crash
+  during the transaction leaves a consistent pre-run backup.
+- The script fails closed on an incompatible schema: it aborts if a required
+  table/column is missing (including `assets.notes` / `provider_config` /
+  `metadata`), if the file is not a plain SQLite database, or if an `asset_id`
+  table it does not recognise references the asset.
+
+### Safety preconditions and limitations
+
+- Requires a plain (unencrypted) SQLite database; refuses `.wfbackup`/encrypted
+  files.
+- `sync_enabled` defaults to "on" in the Wealthfolio app when the setting row
+  is absent; the script only treats an **explicit** truthy row as a blocker, and
+  otherwise relies on the concrete sync signals (trusted device, engine history,
+  outbox rows, per-row metadata). If you use Connect/device sync, prefer the
+  app UI.
+- The `name` check catches a renamed asset, but `name`/`display_code` alone are
+  not treated as user data because auto-resolution populates them identically
+  for both the PHP and USD asset. An asset whose auto-created fields happen to
+  look user-authored (e.g. a provider-enriched `notes`/`metadata`) is therefore
+  reported for manual review rather than deleted.
+- The auto allowlists (`AUTO_METADATA_KEYS`, `BUILTIN_PROVIDERS`,
+  `AUTO_OVERRIDE_TYPES`) track the current Wealthfolio schema. A newer schema
+  that writes a new auto key will block deletion (fail closed) — extend the
+  allowlist deliberately after verifying it is auto-generated.
+- Assets still referenced by activities cannot be cleaned by this script; it
+  only reports them. Those need manual review (the activity/quote history may
+  need to be reconciled against the USD asset first).
+- Exit code is non-zero on usage/schema/database errors; a run that finds only
+  skipped assets still exits `0` with a report.
+
+Run the tests with:
+
+```bash
+python -m unittest discover -s scripts -p "test_*.py"
+```
+
+---
+
 ## Docker
 
 ```bash

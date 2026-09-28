@@ -280,6 +280,9 @@ var _ = Describe("Binance Client", func() {
 		Expect(activities[0].SourceRecordID).To(Equal("fiat:buy-1"))
 		Expect(activities[0].Type).To(Equal(brokerage.ActivityBuy))
 		Expect(activities[0].Symbol.Symbol).To(Equal("SOL"))
+		// The fiat per-unit price is preserved for the transaction economics; the
+		// USD asset identity is carried on the symbol. The USD asset's BROKER
+		// quote is guarded consumer-side, not by zeroing the price here.
 		Expect(activities[0].Price).To(Equal(400.0))
 		Expect(activities[0].Units).To(Equal(2.5))
 		Expect(activities[0].Amount).To(Equal(1000.0))
@@ -355,6 +358,9 @@ var _ = Describe("Binance Client", func() {
 		Expect(trade.FeeAsset).To(Equal("PHP"))
 		Expect(trade.Currency).To(Equal("PHP"))
 		Expect(trade.SymbolCurrency).To(Equal("USD"))
+		// The fiat price is the recorded cost, not a market quote; it is kept so
+		// the activity is not seen as an incomplete, reviewable trade.
+		Expect(trade.Price).To(Equal(30.0))
 		Expect(trade.Amount).To(Equal(30.0))
 	})
 })

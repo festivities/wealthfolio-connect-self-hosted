@@ -9,6 +9,8 @@
 package cexcommon
 
 import (
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,6 +95,8 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 		UpdatedAt:       now,
 	}
 
+	averageCosts := averageCostByAsset(s.Balances, s.Trades)
+
 	cashBalance := brokerage.Balance{
 		Currency: brokerage.Currency{Code: "USD"},
 	}
@@ -118,8 +122,12 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 			},
 			Units: b.Quantity,
 			Price: b.PriceUSD,
-			// ponytail: balances expose mark, not cost; derive basis from trades when quantities change.
-			Currency: brokerage.Currency{Code: "USD"},
+			// The balance only exposes the current mark, never the cost. When the
+			// fetched trade history fully explains the position we derive the true
+			// average cost from it; otherwise the value stays zero so callers omit
+			// it rather than present the mark (or a bare zero) as the cost basis.
+			AveragePurchasePrice: averageCosts[asset],
+			Currency:             brokerage.Currency{Code: "USD"},
 		})
 	}
 
@@ -182,6 +190,162 @@ func Translate(slug, displayName string, s Snapshot) domainsync.BrokerSnapshot {
 		Holdings:   []brokerage.Holdings{holding},
 		Activities: activities,
 	}
+}
+
+// quantityRelTolerance guards sums of exchange-supplied float64 quantities
+// against accumulated rounding. A single float64 carries ~2e-16 relative
+// precision, so summing a few thousand fills stays well inside 1e-12 relative;
+// 1e-9 is generous yet still rejects any balance off by a meaningful fraction.
+// An absolute floor covers reference values near zero. Using a relative bound
+// (rather than an absolute 1e-8) matters for tiny crypto balances, where an
+// absolute tolerance would swallow a materially different balance and report a
+// false "known basis".
+const (
+	quantityRelTolerance = 1e-9
+	quantityAbsFloor     = 1e-12
+)
+
+func quantityTolerance(reference float64) float64 {
+	return math.Max(quantityAbsFloor, quantityRelTolerance*math.Abs(reference))
+}
+
+// averageCostByAsset derives a per-asset average purchase price in USD from the
+// trade history using average-cost accounting. It returns a value only when the
+// entire current balance is explained by USD-denominated trades; a position that
+// has any non-USD fill, predates the fetched history, or was partly built by an
+// unrecorded transfer is left out so no fabricated cost basis is reported.
+//
+// Fees are ignored: commission can be charged in an unrelated asset, and folding
+// it in would need a price for that asset. Treating USDT/USDC fills as USD is the
+// same assumption the USD valuation already makes.
+//
+// Known limitation: trade history contains no transfers. A deposit (or an
+// offsetting deposit+withdrawal) that nets the balance to the trade total is
+// indistinguishable from a fully traded position and will be costed as if it had
+// been bought, so the derived value is best-effort, not authoritative.
+func averageCostByAsset(balances []Balance, trades []Trade) map[string]float64 {
+	assets := make([]string, 0, len(balances))
+	held := make(map[string]float64, len(balances))
+	for _, b := range balances {
+		asset := strings.ToUpper(b.Asset)
+		if b.Quantity == 0 || IsStablecoin(asset) {
+			continue
+		}
+		if _, ok := held[asset]; !ok {
+			assets = append(assets, asset)
+		}
+		held[asset] += b.Quantity
+	}
+	if len(assets) == 0 {
+		return nil
+	}
+	// Longest ticker first so "BTC" matches before a shorter ticker it prefixes.
+	sort.Slice(assets, func(i, j int) bool { return len(assets[i]) > len(assets[j]) })
+
+	type ledger struct {
+		quantity float64
+		cost     float64
+		unknown  bool
+	}
+	ledgers := make(map[string]*ledger, len(assets))
+	// A fill outside the USD quote (e.g. a PHP-funded purchase) added units whose
+	// cost we cannot convert, so the asset's basis is unknowable even if USD
+	// trades later happen to net the same quantity.
+	foreign := make(map[string]struct{})
+
+	// Chronological order keeps the running average well-defined when a sell
+	// appears before a buy only because the history was trimmed.
+	ordered := make([]Trade, len(trades))
+	copy(ordered, trades)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Timestamp.Before(ordered[j].Timestamp)
+	})
+
+	for _, t := range ordered {
+		asset := matchHeldAsset(t.Symbol, assets)
+		if asset == "" || t.Quantity <= 0 {
+			continue
+		}
+		currency := t.Currency
+		if currency == "" {
+			currency = "USD"
+		}
+		if !strings.EqualFold(currency, "USD") {
+			foreign[asset] = struct{}{}
+			continue
+		}
+		l, ok := ledgers[asset]
+		if !ok {
+			l = &ledger{}
+			ledgers[asset] = l
+		}
+		if strings.EqualFold(t.Side, "sell") {
+			// A sell larger than the tracked lot means earlier acquisitions (or a
+			// deposit) are missing from the history, so the basis is unknowable.
+			if l.unknown || t.Quantity-l.quantity > quantityTolerance(l.quantity) {
+				l.unknown = true
+				l.quantity -= t.Quantity
+				continue
+			}
+			average := l.cost / l.quantity
+			l.quantity -= t.Quantity
+			l.cost -= average * t.Quantity
+			continue
+		}
+		if t.Price <= 0 {
+			l.unknown = true
+			l.quantity += t.Quantity
+			continue
+		}
+		l.quantity += t.Quantity
+		l.cost += t.Price * t.Quantity
+	}
+
+	out := make(map[string]float64, len(ledgers))
+	for asset, l := range ledgers {
+		if _, ok := foreign[asset]; ok {
+			continue
+		}
+		if l.unknown || l.quantity <= 0 || l.cost <= 0 {
+			continue
+		}
+		balance := held[asset]
+		if math.Abs(l.quantity-balance) > quantityTolerance(balance) {
+			continue
+		}
+		out[asset] = l.cost / l.quantity
+	}
+	return out
+}
+
+// matchHeldAsset resolves a trade symbol to the held balance asset it belongs to.
+// Spot fills arrive as a quote pair — "BTCUSDT" or a separated "BTC-USDT" /
+// "BTC/USDT" — while fiat orders carry the bare ticker ("SOL"), so the balance
+// set disambiguates and the stablecoin quote is stripped.
+func matchHeldAsset(symbol string, assets []string) string {
+	sym := strings.ToUpper(strings.TrimSpace(symbol))
+	if sym == "" {
+		return ""
+	}
+	candidates := []string{sym}
+	if normalized := strings.NewReplacer("-", "", "_", "", "/", "").Replace(sym); normalized != sym {
+		candidates = append(candidates, normalized)
+	}
+	for _, candidate := range candidates {
+		for _, asset := range assets {
+			if candidate == asset {
+				return asset
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		for _, asset := range assets {
+			if strings.HasPrefix(candidate, asset) && IsStablecoin(candidate[len(asset):]) {
+				return asset
+			}
+		}
+	}
+	return ""
 }
 
 // IsStablecoin returns true for the most common USD-pegged stablecoins.

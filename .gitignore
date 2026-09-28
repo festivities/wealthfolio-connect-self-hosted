@@ -43,5 +43,9 @@ mocks/
 # Build cache
 .cache/
 
+# Python (maintenance scripts)
+__pycache__/
+*.pyc
+
 # Logs
 *.log
