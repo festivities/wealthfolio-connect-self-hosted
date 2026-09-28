@@ -270,7 +270,8 @@ var _ = Describe("Binance Client", func() {
 				},
 			}}},
 		}}
-		snapshot, err := New("k", "s", fetcher).Fetch(context.Background())
+		client := New("k", "s", fetcher)
+		snapshot, err := client.Fetch(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(snapshot.Accounts[0].InitialTxSyncDone).To(BeTrue())
 
@@ -280,16 +281,19 @@ var _ = Describe("Binance Client", func() {
 		Expect(activities[0].SourceRecordID).To(Equal("fiat:buy-1"))
 		Expect(activities[0].Type).To(Equal(brokerage.ActivityBuy))
 		Expect(activities[0].Symbol.Symbol).To(Equal("SOL"))
-		// The fiat per-unit price is preserved for the transaction economics; the
-		// USD asset identity is carried on the symbol. The USD asset's BROKER
-		// quote is guarded consumer-side, not by zeroing the price here.
-		Expect(activities[0].Price).To(Equal(400.0))
+		Expect(activities[0].Price).To(BeZero())
 		Expect(activities[0].Units).To(Equal(2.5))
 		Expect(activities[0].Amount).To(Equal(1000.0))
 		Expect(activities[0].Fee).To(Equal(10.0))
 		Expect(activities[0].Currency.Code).To(Equal("PHP"))
 		Expect(activities[0].Symbol.Currency.Code).To(Equal("USD"))
 		Expect(activities[0].TradeDate.UnixMilli()).To(Equal(int64(1700000000123)))
+
+		// Repeated fetches retain the stable source key used by persistence upserts.
+		repeated, err := client.Fetch(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(repeated.Activities["binance-spot"]).To(HaveLen(1))
+		Expect(repeated.Activities["binance-spot"][0].SourceRecordID).To(Equal("fiat:buy-1"))
 	})
 
 	It("marks successful fiat history fetched even when every order is incomplete", func() {
@@ -358,9 +362,39 @@ var _ = Describe("Binance Client", func() {
 		Expect(trade.FeeAsset).To(Equal("PHP"))
 		Expect(trade.Currency).To(Equal("PHP"))
 		Expect(trade.SymbolCurrency).To(Equal("USD"))
-		// The fiat price is the recorded cost, not a market quote; it is kept so
-		// the activity is not seen as an incomplete, reviewable trade.
-		Expect(trade.Price).To(Equal(30.0))
+		Expect(trade.Price).To(BeZero())
 		Expect(trade.Amount).To(Equal(30.0))
+		Expect(trade.Fee).To(Equal(0.5))
+	})
+
+	It("omits a fee-free PHP unit price but preserves the transaction amount", func() {
+		trade := mapFiatPayment(FiatPayment{
+			OrderNo: "order-2", SourceAmount: "1000", FiatCurrency: "PHP",
+			ObtainAmount: "2.5", CryptoCurrency: "SOL", TotalFee: "0", Price: "400",
+		})
+		Expect(trade.Price).To(BeZero())
+		Expect(trade.Quantity).To(Equal(2.5))
+		Expect(trade.Amount).To(Equal(1000.0))
+		Expect(trade.Currency).To(Equal("PHP"))
+		Expect(trade.Fee).To(BeZero())
+	})
+
+	It("uses the fiat price-times-quantity amount fallback before omitting price", func() {
+		trade := mapFiatPayment(FiatPayment{
+			OrderNo: "order-3", FiatCurrency: "PHP", ObtainAmount: "2.5",
+			CryptoCurrency: "SOL", Price: "400",
+		})
+		Expect(trade.Price).To(BeZero())
+		Expect(trade.Amount).To(Equal(1000.0))
+	})
+
+	It("keeps a USD fiat unit price for the USD-quoted asset", func() {
+		trade := mapFiatPayment(FiatPayment{
+			OrderNo: "order-4", SourceAmount: "1000", FiatCurrency: "USD",
+			ObtainAmount: "2.5", CryptoCurrency: "SOL", Price: "400",
+		})
+		Expect(trade.Price).To(Equal(400.0))
+		Expect(trade.Amount).To(Equal(1000.0))
+		Expect(trade.Currency).To(Equal("USD"))
 	})
 })

@@ -12,10 +12,12 @@ around together with its quotes, ``quote_sync_state`` row and *auto-generated*
 taxonomy assignments, even after every activity has been re-upserted against
 the USD asset.
 
-This is a manual maintenance utility, not part of the running server. It never
-guesses: it removes only unreferenced connector artifacts and narrowly matched
-old PHP broker quotes backed by a Binance fiat BUY activity. Anything that
-could be user intent is a **blocker** (reported as ``SKIP``, never deleted).
+This is a manual maintenance utility, not part of the running server. Current
+Connect mapping suppresses non-USD unit prices, so the cross-currency quote
+cleanup is for legacy rows already persisted by an older connector. The utility
+never guesses: it removes only unreferenced connector artifacts and narrowly
+matched old PHP broker quotes backed by a Binance fiat BUY activity. Anything
+that could be user intent is a **blocker** (reported as ``SKIP``, never deleted).
 
 What blocks a deletion
 -----------------------

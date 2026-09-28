@@ -234,7 +234,13 @@ enabled. Allow this server's IP in the gateway's *Trusted IPs* list.
 Create a **read-only** API key (Spot account permissions are sufficient).
 The client syncs Spot fills and completed Buy Crypto fiat payments, preserving the
 fiat transaction currency (for example, PHP) while matching crypto assets to the
-USD-quoted Binance holding identity; the read-only key is sufficient.
+USD-quoted Binance holding identity; the read-only key is sufficient. For a
+non-USD fiat purchase, the unit price is omitted so the official Wealthfolio
+backend cannot mistake a PHP price for a USD quote. The fiat amount, currency,
+quantity, fee and Binance source identity are preserved. A fee-bearing activity
+with a positive amount and no USD unit price is marked for review; the fee is
+retained. No FX rate or USD cost basis is invented. A basis is derived only
+when complete USD trade history explains the current quantity.
 
 | Name                 | Description       |
 | -------------------- | ----------------- |
@@ -387,15 +393,6 @@ Coverage threshold is **≥ 90%** — CI will fail below that.
 
 ---
 
-## Upstream Wealthfolio v3.9.1 backend patch
-
-Before building the self-hosted Wealthfolio backend from upstream v3.9.1
-(`392f272c`), apply [`patches/wealthfolio-v3.9.1-broker-quote-basis.patch`](./patches/wealthfolio-v3.9.1-broker-quote-basis.patch)
-to `crates/connect/src/broker/service.rs`. It prevents fiat-denominated trade
-prices from becoming quotes in another currency and avoids carrying stale
-average-cost basis forward when holdings grow without a reported basis. This
-Rust patch is separate from building this repository's Go service.
-
 ## Maintenance: stale fiat-quoted crypto assets
 
 Before the symbol fix that quotes the crypto leg of a fiat-funded purchase in
@@ -408,9 +405,10 @@ the stale asset visible.
 
 `scripts/cleanup_php_crypto_assets.py` reports and removes safe stale rows from a
 Wealthfolio SQLite database. It uses only the Python standard library, defaults
-to a **dry run**, and refuses to touch anything it cannot prove is safe. The
-report has two sections: stale PHP-quoted crypto assets and existing
-cross-currency broker quotes on USD crypto assets.
+to a **dry run**, and refuses to touch anything it cannot prove is safe. It is
+for historical PHP-quoted crypto assets and cross-currency broker quotes that
+may already exist; current Connect mapping omits a non-USD unit price, preventing
+new fiat prices from seeding quotes on USD crypto assets.
 
 ### Invocation
 

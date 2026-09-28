@@ -200,7 +200,17 @@ func mapFiatPayment(payment FiatPayment) cexcommon.Trade {
 	quantity, _ := strconv.ParseFloat(payment.ObtainAmount, 64) //nolint:errcheck // treat malformed exchange values as zero
 	amount, _ := strconv.ParseFloat(payment.SourceAmount, 64)   //nolint:errcheck // treat malformed exchange values as zero
 	fee, _ := strconv.ParseFloat(payment.TotalFee, 64)          //nolint:errcheck // treat malformed exchange values as zero
-	currency := strings.ToUpper(payment.FiatCurrency)
+	currency := strings.ToUpper(strings.TrimSpace(payment.FiatCurrency))
+	if currency != "USD" {
+		// The official Wealthfolio consumer seeds a broker quote from a positive
+		// unit price without checking that its currency matches the asset quote.
+		// Preserve its prior amount fallback before suppressing this incompatible
+		// price; amount, fee, units and source identity remain exchange-derived.
+		if amount == 0 {
+			amount = price * quantity
+		}
+		price = 0
+	}
 	return cexcommon.Trade{
 		ID:        "fiat:" + payment.OrderNo,
 		Symbol:    strings.ToUpper(payment.CryptoCurrency),
@@ -211,14 +221,9 @@ func mapFiatPayment(payment FiatPayment) cexcommon.Trade {
 		FeeAsset:  currency,
 		Timestamp: time.UnixMilli(payment.CreateTime).UTC(),
 		Currency:  currency,
-		// Binance Spot holdings are quoted in USD; keep the fiat transaction
-		// currency separate so PHP purchases resolve to the same crypto asset.
-		// Price stays in the fiat transaction currency (it is the recorded cost,
-		// not a market quote). The Wealthfolio broker consumer must not seed the
-		// USD asset's BROKER quote from a differently-denominated price; that
-		// guard lives in its broker service. Suppressing the price here instead
-		// would make the consumer treat every fiat buy with a fee as an
-		// incomplete, reviewable trade and corrupt the final-cash inference.
+		// Binance Spot holdings are quoted in USD; keep fiat transaction currency
+		// separate so purchases resolve to the same crypto asset. Non-USD fiat
+		// prices are omitted because the consumer would misapply them as USD quotes.
 		SymbolCurrency: "USD",
 		Amount:         amount,
 	}

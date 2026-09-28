@@ -100,7 +100,7 @@ var _ = Describe("Translate", func() {
 				{Asset: "SOL", Quantity: 2.5, PriceUSD: 160, USDValue: 400},
 			},
 			Trades: []cexcommon.Trade{
-				{ID: "fiat:1", Symbol: "SOL", Side: "buy", Price: 400, Quantity: 2.5, Currency: "PHP", SymbolCurrency: "USD", Amount: 1000, Timestamp: time.Unix(1000, 0)},
+				{ID: "fiat:1", Symbol: "SOL", Side: "buy", Price: 0, Quantity: 2.5, Currency: "PHP", SymbolCurrency: "USD", Amount: 1000, Timestamp: time.Unix(1000, 0)},
 			},
 		})
 		Expect(snap.Holdings[0].Positions[0].AveragePurchasePrice).To(BeZero())
@@ -113,7 +113,19 @@ var _ = Describe("Translate", func() {
 			},
 			Trades: []cexcommon.Trade{
 				{ID: "spot:1", Symbol: "SOLUSDT", Side: "buy", Price: 160, Quantity: 2.5, Currency: "USD", Timestamp: time.Unix(1000, 0)},
-				{ID: "fiat:1", Symbol: "SOL", Side: "buy", Price: 400, Quantity: 2.5, Currency: "PHP", SymbolCurrency: "USD", Amount: 1000, Timestamp: time.Unix(2000, 0)},
+				{ID: "fiat:1", Symbol: "SOL", Side: "buy", Price: 0, Quantity: 2.5, Currency: "PHP", SymbolCurrency: "USD", Amount: 1000, Timestamp: time.Unix(2000, 0)},
+			},
+		})
+		Expect(snap.Holdings[0].Positions[0].AveragePurchasePrice).To(BeZero())
+	})
+
+	It("does not derive a cost basis when trade quantity differs from the holding", func() {
+		snap := cexcommon.Translate("binance", "Binance", cexcommon.Snapshot{
+			Balances: []cexcommon.Balance{
+				{Asset: "SOL", Quantity: 2, PriceUSD: 160, USDValue: 320},
+			},
+			Trades: []cexcommon.Trade{
+				{ID: "spot:1", Symbol: "SOLUSDT", Side: "buy", Price: 150, Quantity: 1, Currency: "USD", Timestamp: time.Unix(1000, 0)},
 			},
 		})
 		Expect(snap.Holdings[0].Positions[0].AveragePurchasePrice).To(BeZero())
@@ -183,7 +195,7 @@ var _ = Describe("Translate", func() {
 			},
 			Trades: []cexcommon.Trade{
 				{ID: "spot:1", Symbol: "BTCUSDT", Side: "buy", Price: 60000, Quantity: 1, Currency: "USD", Timestamp: time.Unix(1000, 0)},
-				{ID: "fiat:1", Symbol: "BTC", Side: "buy", Price: 3000000, Quantity: 1, Currency: "PHP", SymbolCurrency: "USD", Amount: 3000000, Timestamp: time.Unix(2000, 0)},
+				{ID: "fiat:1", Symbol: "BTC", Side: "buy", Price: 0, Quantity: 1, Currency: "PHP", SymbolCurrency: "USD", Amount: 3000000, Timestamp: time.Unix(2000, 0)},
 				{ID: "spot:2", Symbol: "BTCUSDT", Side: "sell", Price: 60000, Quantity: 1, Currency: "USD", Timestamp: time.Unix(3000, 0)},
 			},
 		})
