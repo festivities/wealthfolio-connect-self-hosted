@@ -111,11 +111,12 @@ var _ = Describe("ActivityRepository", func() {
 	})
 
 	It("upserts a batch", func() {
-		mock.ExpectExec(rx(`INSERT INTO "activities"`)).
+		mock.ExpectExec(`(?is)INSERT INTO "activities".*DO UPDATE SET.*"symbol_currency_code"`).
 			WillReturnResult(sqlmock.NewResult(0, 2))
 		err := repo.UpsertBatch(ctx, "acc", []brokerage.Activity{
 			{ID: "1", SourceRecordID: "s1", Type: brokerage.ActivityBuy, TradeDate: now,
-				Symbol: &brokerage.Symbol{Symbol: "AAPL"}},
+				Currency: brokerage.Currency{Code: "PHP"},
+				Symbol:   &brokerage.Symbol{Symbol: "SOL", Currency: brokerage.Currency{Code: "USD"}}},
 			{ID: "2", SourceRecordID: "s2", Type: brokerage.ActivitySell, TradeDate: now},
 		})
 		Expect(err).NotTo(HaveOccurred())

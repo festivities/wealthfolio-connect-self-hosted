@@ -72,7 +72,7 @@ func (r *activityRepo) UpsertBatch(ctx context.Context, accountID string, items 
 	err := r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "account_id"}, {Name: "source_record_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"price", "units", "amount", "type",
+			"price", "units", "amount", "symbol_currency_code", "type",
 			"trade_date", "settlement_date", "fee", "description",
 		}),
 	}).Create(&pos).Error
